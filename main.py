@@ -1,20 +1,29 @@
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional  # <-- Naye fields ke liye zaroori hain
+from typing import List, Optional
 from patients import patients_db
 
 app = FastAPI(title="Hospital Management API")
 
+# 🔒 CORS Configurations - Dono URLs (Ghar ka local aur Railway frontend) completely allowed hain
+origins = [
+    "https://railway.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_origins_regex="https://.*\\.railway\\.app", # Railway ke subdomains ke liye safety lock bypass
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True
 )
 
-# 📋 Frontend ke mutabiq bilkul naya structure (Schema)
+# 📋 Schema Structure
 class PatientCreate(BaseModel):
     name: str
     age: int
@@ -22,66 +31,71 @@ class PatientCreate(BaseModel):
     contact: Optional[str] = None
     email: Optional[str] = None
     blood_group: Optional[str] = None
-    medical_conditions: List[str]  # <-- Lovable 'illness' ki jagah ye bhej raha hai
+    medical_conditions: List[str]
     admission_date: Optional[str] = None
     notes: Optional[str] = None
 
-
-# 1️⃣ READ (GET) - Saare Patients ka data dekhne ke liye
+# 1️⃣ READ (GET) - Humen data ko frontend ke mutabiq map karke bhejna hai taake 'id' aur 'medical_conditions' sahi load hon
 @app.get("/patients")
 def get_all_patients():
-    return patients_db
+    formatted_list = []
+    for p in patients_db:
+        # Frontend ke columns ko 'id' aur 'medical_conditions' chahiye hota hai list format mein
+        conditions = p.get("medical_conditions", [])
+        if not conditions and "illness" in p:
+            conditions = [p["illness"]] if isinstance(p["illness"], str) else p["illness"]
 
+        formatted_list.append({
+            "id": str(p.get("patient_id")),
+            "patient_id": p.get("patient_id"),
+            "name": p.get("name"),
+            "age": p.get("age"),
+            "gender": p.get("gender"),
+            "contact": p.get("contact", ""),
+            "email": p.get("email", ""),
+            "blood_group": p.get("blood_group", p.get("blood_group", "O+")),
+            "medical_conditions": conditions,
+            "admission_date": p.get("admission_date", "2026-09-05"),
+            "notes": p.get("notes", "")
+        })
+    return formatted_list
 
-# 2️⃣ READ (GET) - Kisi AIK makhsoos patient ko ID se dhoondne ke liye
+# 2️⃣ READ (GET) - Single Patient
 @app.get("/patients/{patient_id}")
 def get_patient_by_id(patient_id: str):
     for patient in patients_db:
-        if str(patient["patient_id"]) == str(patient_id):
-            return patient
+        if str(patient.get("patient_id")) == str(patient_id):
+            # Dynamic object transformation
+            conditions = patient.get("medical_conditions", [])
+            if not conditions and "illness" in patient:
+                conditions = [patient["illness"]] if isinstance(patient["illness"], str) else patient["illness"]
+            
+            return {
+                "id": str(patient.get("patient_id")),
+                "patient_id": patient.get("patient_id"),
+                "name": patient.get("name"),
+                "age": patient.get("age"),
+                "gender": patient.get("gender"),
+                "contact": patient.get("contact", ""),
+                "email": patient.get("email", ""),
+                "blood_group": patient.get("blood_group", "O+"),
+                "medical_conditions": conditions,
+                "admission_date": patient.get("admission_date", "2026-09-05"),
+                "notes": patient.get("notes", "")
+            }
+    raise HTTPException(status_code=404, detail="Patient nahi mila!")
 
-    raise HTTPException(status_code=404, detail="Mareez (Patient) nahi mila!")
-
-
-# 3️⃣ READ (GET) - Illness/Medical Condition ke mutabiq search/filter karne ke liye
-@app.get("/search-patients/")
-def search_patients_by_illness(illness: str):
-    results = []
-    for patient in patients_db:
-        # Purane data ke liye 'illness' check karega aur naye data ke liye 'medical_conditions' list
-        has_illness = "illness" in patient and illness.lower() in patient["illness"].lower()
-        has_condition = False
-        
-        if "medical_conditions" in patient and patient["medical_conditions"]:
-            for condition in patient["medical_conditions"]:
-                if illness.lower() in condition.lower():
-                    has_condition = True
-                    break
-        
-        if has_illness or has_condition:
-            results.append(patient)
-
-    if not results:
-        raise HTTPException(status_code=404, detail="Is bemari ka koi mareez nahi mila")
-
-    return results
-
-
-# 4️⃣ CREATE (POST) - Naya Patient database aur asli file mein save karne ke liye
-import json  # <-- Sab se upar ya function ke andar import kar lein
-
-# 4️⃣ CREATE (POST) - Naya Patient database aur asli file mein khoobsurat format mein save karne ke liye
+# 3️⃣ CREATE (POST) - Naya Patient save karne ke liye
 @app.post("/patients")
 def create_patient(patient: PatientCreate):
-    new_id = max([p["patient_id"] for p in patients_db]) + 1 if patients_db else 1
-    illness_value = patient.medical_conditions if patient.medical_conditions else "None"
+    new_id = max([p.get("patient_id", 0) for p in patients_db]) + 1 if patients_db else 1
     
     new_patient = {
         "patient_id": new_id,
         "name": patient.name,
         "age": patient.age,
         "gender": patient.gender,
-        "illness": illness_value,
+        "illness": patient.medical_conditions[0] if patient.medical_conditions else "None",
         "contact": patient.contact,
         "email": patient.email,
         "blood_group": patient.blood_group,
@@ -92,16 +106,12 @@ def create_patient(patient: PatientCreate):
     
     patients_db.append(new_patient)
     
-    # 💾 Asli file mein data ko khoobsurat tareeqe se spaces ke saath save karne ke liye
+    # Python file ko refresh karne ka tareeqa
     try:
-        # json.dumps data ko 'indent=4' ke zariye table/readable form mein badal deta hai
         formatted_data = json.dumps(patients_db, indent=4, ensure_ascii=False)
-        
         with open("patients.py", "w", encoding="utf-8") as file:
             file.write(f"patients_db = {formatted_data}")
     except Exception as e:
-        print(f"File save karne mein masla aaya: {e}")
+        print(f"File save error: {e}")
         
     return new_patient
-
-# Terminal mein chalane ke liye: uvicorn main:app --reload
