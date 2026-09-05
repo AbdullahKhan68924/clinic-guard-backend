@@ -17,7 +17,7 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origins_regex="https://.*\\.railway\\.app", # Railway ke subdomains ke liye safety lock bypass
+    allow_origin_regex="https://.*\\.railway\\.app", # Railway ke subdomains ke liye safety lock bypass
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True
