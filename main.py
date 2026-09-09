@@ -1,117 +1,63 @@
-import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
-from patients import patients_db
+from typing import List
 
-app = FastAPI(title="Hospital Management API")
+# Aapki 'games.py' file se saara data import ho raha hai
+from games import GAMES_DATABASE
 
-# 🔒 CORS Configurations - Dono URLs (Ghar ka local aur Railway frontend) completely allowed hain
-origins = [
-    "https://railway.app",
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
+app = FastAPI(title="Games Directory API")
 
+# CORS Middleware (Lovable frontend se connect karne ke liye zaroori hai)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex="https://.*\\.railway\\.app", # Railway ke subdomains ke liye safety lock bypass
+    allow_origins=["*"],  
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True
 )
 
-# 📋 Schema Structure
-class PatientCreate(BaseModel):
-    name: str
-    age: int
-    gender: str
-    contact: Optional[str] = None
-    email: Optional[str] = None
-    blood_group: Optional[str] = None
-    medical_conditions: List[str]
-    admission_date: Optional[str] = None
-    notes: Optional[str] = None
+# Pydantic Model (Data Validation)
+class Game(BaseModel):
+    id: int
+    title: str
+    platform: str
+    release_year: int
+    genre: str
+    rating: float
+    description: str
+    image_url: str
+    is_wishlisted: bool
 
-# 1️⃣ READ (GET) - Humen data ko frontend ke mutabiq map karke bhejna hai taake 'id' aur 'medical_conditions' sahi load hon
-@app.get("/patients")
-def get_all_patients():
-    formatted_list = []
-    for p in patients_db:
-        # Frontend ke columns ko 'id' aur 'medical_conditions' chahiye hota hai list format mein
-        conditions = p.get("medical_conditions", [])
-        if not conditions and "illness" in p:
-            conditions = [p["illness"]] if isinstance(p["illness"], str) else p["illness"]
+# --- API Endpoints ---
 
-        formatted_list.append({
-            "id": str(p.get("patient_id")),
-            "patient_id": p.get("patient_id"),
-            "name": p.get("name"),
-            "age": p.get("age"),
-            "gender": p.get("gender"),
-            "contact": p.get("contact", ""),
-            "email": p.get("email", ""),
-            "blood_group": p.get("blood_group", p.get("blood_group", "O+")),
-            "medical_conditions": conditions,
-            "admission_date": p.get("admission_date", "2026-09-05"),
-            "notes": p.get("notes", "")
-        })
-    return formatted_list
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Games API! Go to /docs for full API documentation."}
 
-# 2️⃣ READ (GET) - Single Patient
-@app.get("/patients/{patient_id}")
-def get_patient_by_id(patient_id: str):
-    for patient in patients_db:
-        if str(patient.get("patient_id")) == str(patient_id):
-            # Dynamic object transformation
-            conditions = patient.get("medical_conditions", [])
-            if not conditions and "illness" in patient:
-                conditions = [patient["illness"]] if isinstance(patient["illness"], str) else patient["illness"]
-            
+# 1. Tamam 200 Games get karne ke liye
+@app.get("/api/games", response_model=List[Game], tags=["Games"])
+def get_all_games():
+    return GAMES_DATABASE
+
+# 2. Kisi ek Game ki detail ID se nikalne ke liye (String/Integer dono ko handle karega)
+@app.get("/api/games/{game_id}", response_model=Game, tags=["Games"])
+def get_game(game_id: int):
+    for game in GAMES_DATABASE:
+        # Dono taraf integer check taake ID 25 ya koi bhi ID lazmi match ho jaye
+        if int(game["id"]) == int(game_id):
+            return game
+    raise HTTPException(status_code=404, detail="Game not found")
+
+# 3. Wishlist ko toggle (Add/Remove) karne ke liye
+@app.post("/api/games/{game_id}/wishlist", tags=["Games"])
+def toggle_wishlist(game_id: int):
+    for game in GAMES_DATABASE:
+        if int(game["id"]) == int(game_id):
+            game["is_wishlisted"] = not game["is_wishlisted"]
             return {
-                "id": str(patient.get("patient_id")),
-                "patient_id": patient.get("patient_id"),
-                "name": patient.get("name"),
-                "age": patient.get("age"),
-                "gender": patient.get("gender"),
-                "contact": patient.get("contact", ""),
-                "email": patient.get("email", ""),
-                "blood_group": patient.get("blood_group", "O+"),
-                "medical_conditions": conditions,
-                "admission_date": patient.get("admission_date", "2026-09-05"),
-                "notes": patient.get("notes", "")
+                "success": True, 
+                "is_wishlisted": game["is_wishlisted"], 
+                "message": f"Wishlist status updated for {game['title']}"
             }
-    raise HTTPException(status_code=404, detail="Patient nahi mila!")
-
-# 3️⃣ CREATE (POST) - Naya Patient save karne ke liye
-@app.post("/patients")
-def create_patient(patient: PatientCreate):
-    new_id = max([p.get("patient_id", 0) for p in patients_db]) + 1 if patients_db else 1
-    
-    new_patient = {
-        "patient_id": new_id,
-        "name": patient.name,
-        "age": patient.age,
-        "gender": patient.gender,
-        "illness": patient.medical_conditions[0] if patient.medical_conditions else "None",
-        "contact": patient.contact,
-        "email": patient.email,
-        "blood_group": patient.blood_group,
-        "medical_conditions": patient.medical_conditions,
-        "admission_date": patient.admission_date,
-        "notes": patient.notes
-    }
-    
-    patients_db.append(new_patient)
-    
-    # Python file ko refresh karne ka tareeqa
-    try:
-        formatted_data = json.dumps(patients_db, indent=4, ensure_ascii=False)
-        with open("patients.py", "w", encoding="utf-8") as file:
-            file.write(f"patients_db = {formatted_data}")
-    except Exception as e:
-        print(f"File save error: {e}")
-        
-    return new_patient
+    raise HTTPException(status_code=404, detail="Game not found")
